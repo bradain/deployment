@@ -1,0 +1,356 @@
+# Setting DEBUG makes everything a trial run, echoing commands instead of making real changes
+[ -n "$DEBUG" ] && do="echo " || do=""
+
+Group() {
+  if [ -z "$1" -o -z "$2" ]; then
+    echo "Usage: Group <gid> <name>" && return
+  fi
+  sudo groupinfo $1 1>/dev/null 2>&1
+  egid=$?
+  sudo groupinfo $2 1>/dev/null 2>&1
+  ename=$?
+  if [ $egid != 0 -a $ename != 0 ]; then      # create the group
+    $do sudo groupadd -g $1 $2 >/dev/null 2>&1 || echo "Error creating group $1 $2"
+  elif [ $egid != 0 -a $ename = 0 ]; then  # fix the gid
+    $do sudo groupmod -g $1 $2 && echo "Fixing group $2 gid to $1" || echo "Error changing gid for group $2"
+  elif [ $egid = 0 -a $ename != 0 ]; then  # gid already used
+    echo "WARN: gid $1 is already in use!"
+  fi # else the group is defined properly
+}
+
+User() {
+  # Note: secondary groups are comma-separated!
+  if [ -z "$4" ]; then
+    echo "User $1 not fully defined"
+    echo "Usage: User <Name> <Uid> <Group> <Gecos>\
+    [Home=<path>] [Groups=<grp,grp,...>] [Shell=<shell>] [Class=<class>]" && return
+  fi
+  [ -z "$Shell" ] && Shell="/sbin/nologin"
+  [ -z "$Class" ] && Class="daemon"
+  [ -z "$Home" ] && Home="/nonexistent"
+  _name="$1"
+  _uid="$2"
+  _group="$3"
+  _gecos="$4"
+  _home=""
+  _shell=""
+  _class=""
+  _groups=""
+  shift 4
+  while [ -n "$1" ]; do
+    _arg="$1"
+    case "$_arg" in
+      Home=*) _home="${_arg#Home=}";;
+      Shell=*) _shell="${_arg#Shell=}";;
+      Class=*) _class="${_arg#Class=}";;
+      Groups=*) _groups="${_arg#Groups=}";;
+    esac
+    shift
+  done
+  [ -z "$_home" ] && _home="$Home"
+  [ -z "$_shell" ] && _shell="$Shell"
+  [ -z "$_class" ] && _class="$Class"
+  [ -z "$_groups" ] && _groups="$Groups"
+  [ -z "$DEBUG" ] || echo "DEBUG: name=$_name uid=$_uid group=$_group gecos=$_gecos"
+  [ -z "$DEBUG" ] || echo "DEBUG: home=$_home shell=$_shell class=$_class groups=$_groups"
+  INFO=".u.$_name"
+  sudo userinfo $_name >$INFO 2>/dev/null
+  if [ $? != 0 ]; then  # create the user
+    if [ -z "$_groups" ]; then
+      secondary=""
+    else
+      secondary="-G $_groups"
+    fi
+    # avoid an error - do not make directory if it exists already
+    [ -d $_home ] && makedir="" || makedir="-m"
+    $do sudo useradd -u $_uid -g $_group -s $_shell \
+      $makedir -d $_home $secondary -c "$_gecos" -L $_class $_name \
+      && echo "Created user $_name" || echo "Failed to create user $_name"
+    # if the home directory is the special /nonexistent directory, remove it if it was created
+    [ "$_home" = "/nonexistent" -a -d /nonexistent ] && sudo rm -rf /nonexistent
+  else  # see if the user is correctly set up
+    uid=$(grep uid $INFO | cut -f2)
+    group=$(grep groups $INFO | cut -f2 | cut -d ' ' -f1) # primary group
+    groups=$(grep groups $INFO | cut -f2 | cut -d ' ' -s -f2- | tr ' ' ',') # secondary groups if any
+    class=$(grep class $INFO | cut -f2)
+    gecos=$(grep gecos $INFO | cut -f2)
+    home=$(grep dir $INFO | cut -f2)
+    shell=$(grep shell $INFO | cut -f2)
+    options=""
+    [ "$uid" = "$_uid" ] || options="${options} -u $_uid"
+    [ "$group" = "$_group" ] || options="${options} -g $_group"
+    [ "$class" = "$_class" ] || options="${options} -L $_class"
+    [ "$gecos" = "$_gecos" ] || options="${options} -c \"$_gecos\" "
+    [ "$home" = "$_home" ] || options="${options} -d $_home"
+    [ "$shell" = "$_shell" ] || options="${options} -s $_shell"
+    if [ "$groups" != "$_groups" ]; then
+      options="${options} -S $_groups"
+    fi
+    if [ -n "$options" ]; then
+      $do sudo usermod $options $_name && echo "Fixed user $_name with $options" || echo "Failed to fix user $_name"
+    fi
+  fi
+  rm $INFO
+}
+
+
+Folder() {
+  _path=$1
+  if [ -z "$_path" ]; then
+    echo "Usage: Folder <path> [Mode=<mode>] [Owner=<owner>] [Group=<group>]" && return
+  fi
+  [ -z "$Mode" ] && Mode="0755"
+  [ -z "$Owner" ] && Owner="root"
+  [ -z "$Group" ] && Group="wheel"
+  _mode=""
+  _owner=""
+  _group=""
+  # parse any overrides eg. Mode=0600 Owner=_nobody Group=_nobody
+  shift
+  while [ -n "$1" ]; do
+    _arg="$1"
+    case "$_arg" in
+      Mode=*) _mode="${_arg#Mode=}";;
+      Owner=*) _owner="${_arg#Owner=}";;
+      Group=*) _group="${_arg#Group=}";;
+    esac
+    shift
+  done
+  [ -z "$_mode" ] && _mode="$Mode"
+  [ -z "$_owner" ] && _owner="$Owner"
+  [ -z "$_group" ] && _group="$Group"
+  [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$_mode owner=$_owner group=$_group "
+  if [ -d "$_path" ]; then  # path exists, so check the folder's characteristics
+    set -A stats $(stat -f '%#Lp %Su %Sg' $_path)  # eg. 0755 root wheel
+    [ -z "$DEBUG" ] || echo "DEBUG: ${stats[0]} ${stats[1]} ${stats[2]}"
+    options=""
+    [ "$_mode" = "${stats[0]}" ]  || options="$options -m $_mode"
+    [ "$_owner" = "${stats[1]}" ] || options="$options -o $_owner"
+    [ "$_group" = "${stats[2]}" ] || options="$options -g $_group"
+    if [ -n "$options" ]; then
+      $do sudo install -d $options $_path \
+      && echo "Fixed folder $_path with $options" || echo "Failed to fix $_path with $_options"
+    fi
+  else  # path does not exist, create the folder
+    $do sudo install -d -m $_mode -o $_owner -g $_group $_path \
+      && echo "Created folder $_path" || echo "Failed to create folder $_path"
+  fi
+}
+
+File() {
+  _path=$1
+  if [ -z "$_path" ]; then
+    echo "Usage: File <path> [Mode=<mode>] [Owner=<owner>] [Group=<group>] [Empty] [Preserve]" && return
+  fi
+  [ -z "$Mode" ] && Mode="0644"
+  [ -z "$Owner" ] && Owner="root"
+  [ -z "$Group" ] && Group="wheel"
+  _mode=""
+  _owner=""
+  _group=""
+  _empty=false
+  _preserve=false
+  # parse any overrides eg. Mode=0600 Owner=_nobody Group=_nobody
+  shift
+  while [ -n "$1" ]; do
+    _arg="$1"
+    case "$_arg" in
+      Mode=*) _mode="${_arg#Mode=}";;
+      Owner=*) _owner="${_arg#Owner=}";;
+      Group=*) _group="${_arg#Group=}";;
+      Empty) _empty=true;;
+      Preserve) _preserve=true;;
+    esac
+    shift
+  done
+  [ -z "$_mode" ] && _mode="$Mode"
+  [ -z "$_owner" ] && _owner="$Owner"
+  [ -z "$_group" ] && _group="$Group"
+  [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$_mode owner=$_owner group=$_group "
+  _src=`basename $_path`
+  # Install the file if its missing or different to the source (unless preserve=true)
+  if [ ! -f $_path ]; then
+    MSG="installing"
+  else
+    /usr/bin/cmp $_src $_path >/dev/null 2>&1 && MSG="" || MSG="updating"
+    [ "$_preserve" = true ] && MSG=""   # do not overwrite if we're preserving the file
+    [ "$_empty" = true ] && MSG=""      # Empty implies Preserve
+  fi
+  if [ -n "$MSG" ]; then  # copy the file
+    [ "$_empty" = "true" ] && _src=/dev/null
+    if [ ! -e $_src ]; then
+      echo "Source file not found for $_path" && return 1
+    fi
+    $do sudo install -m $_mode -o $_owner -g $_group $_src $_path \
+      && echo "$MSG file $_path" || echo "failed while $MSG file $_path"
+  fi
+  set -A stats $(stat -f '%#Lp %Su %Sg' $_path)  # eg. 0755 root wheel
+  [ -z "$DEBUG" ] || echo "DEBUG: ${stats[0]} ${stats[1]} ${stats[2]}"
+  if [ "$_mode" != "${stats[0]}" ]; then
+    $do sudo chmod $_mode $_path && echo "Fixed mode $_mode for $_path"\
+    || echo "Failed to fix mode for $_path"
+  fi
+  if [ "$_owner" != "${stats[1]}" ]; then
+    $do sudo chown $_owner $_path && echo "Fixed owner $_owner for $_path"\
+    || echo "Failed to fix owner for $_path"
+  fi
+  if [ "$_group" != "${stats[2]}" ]; then
+    $do sudo chgrp $_group $_path && echo "Fixed group $_group for $_path"\
+    || echo "Failed to fix group for $_path"
+  fi
+}
+
+AllFiles() {
+  _path=$1
+  if [ ! -d "$_path" ]; then
+    echo "Usage: AllFiles <path> " && return  # no overrides
+  fi
+  [ -z "$Mode" ] && Mode="0644"
+  [ -z "$Owner" ] && Owner="root"
+  [ -z "$Group" ] && Group="wheel"
+  [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$Mode owner=$Owner group=$Group "
+  # Copy all of the files to the target folder
+  $do sudo cp -R * $_path || echo "Failed to copy all files to $_path"
+  $do sudo chmod -R $Mode $_path || echo "Failed to set mode for $_path"
+  # make all of the directories executable (navigable)
+  $do sudo chmod +x  `sudo find $_path -type d | xargs`
+  $do sudo chown -R $Owner $_path || echo "Failed to set owner for $_path"
+  $do sudo chgrp -R $Group $_path || echo "Failed to set group for $_path"
+}
+
+
+Link() {
+  _target=$1  # the existing file
+  _path=$2
+  if [ -z "$_path" ]; then
+    echo "Usage: Link <target> <path> [Mode=<mode>] [Owner=<owner>] [Group=<group>]" && return
+  fi
+  [ -z "$Mode" ] && Mode="0755"
+  [ -z "$Owner" ] && Owner="root"
+  [ -z "$Group" ] && Group="wheel"
+  _mode=""
+  _owner=""
+  _group=""
+  # parse any overrides eg. Mode=0600 Owner=_nobody Group=_nobody
+  shift 2
+  while [ -n "$1" ]; do
+    _arg="$1"
+    case "$_arg" in
+      Mode=*) _mode="${_arg#Mode=}";;
+      Owner=*) _owner="${_arg#Owner=}";;
+      Group=*) _group="${_arg#Group=}";;
+    esac
+    shift
+  done
+  [ -z "$_mode" ] && _mode="$Mode"
+  [ -z "$_owner" ] && _owner="$Owner"
+  [ -z "$_group" ] && _group="$Group"
+  [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$_mode owner=$_owner group=$_group "
+  $do sudo ln -sf $_target $_path
+  set -A stats $(stat -f '%#Lp %Su %Sg' $_path)  # eg. 0755 root wheel
+  [ -z "$DEBUG" ] || echo "DEBUG: ${stats[0]} ${stats[1]} ${stats[2]}"
+  if [ "$_mode" != "${stats[0]}" ]; then
+    $do sudo chmod $_mode $_path && echo "Fixed mode $_mode for $_path"\
+    || echo "Failed to fix mode for $_path"
+  fi
+  if [ "$_owner" != "${stats[1]}" ]; then
+    $do sudo chown $_owner $_path && echo "Fixed owner $_owner for $_path"\
+    || echo "Failed to fix owner for $_path"
+  fi
+  if [ "$_group" != "${stats[2]}" ]; then
+    $do sudo chgrp $_group $_path && echo "Fixed group $_group for $_path"\
+    || echo "Failed to fix group for $_path"
+  fi
+}
+
+Cron() {
+  if [ -z "$3" ]; then
+    echo "Usage: Cron <user> \"<sched>\" \"<command>\" "
+    echo "Example: Cron root \"30 1 * * *\" \"/bin/sh daily\" "
+    echo "Insufficient details provided: Cron $1 $2 $3"
+    return 1
+  fi
+  $do sudo grep "$3" /var/cron/tabs/$1 >/dev/null 2>&1 || echo "Missing cron job for $1: $2 $3"
+}
+
+Rotate() {
+  if [ -z "$3" ]; then
+    echo "Usage: Rotate <logfile> \"<settings>\" [\"<command>\"] "
+    echo "Example: Rotate /var/log/flowd.log \"600 5 * $W0D4 B\" \"/etc/rc.d/flowd reload >/dev/null 2>&1\" "
+    echo "Insufficient details provided: Rotate $1 $2 $3"
+    return 1
+  fi
+  $do sudo grep \""$1"\" /etc/newsyslog || echo "Missing newsyslog entry for $1 $2 $3"
+}
+
+# You can install binaries and their dependencies with bin2gaol /path/to/binary
+# and copy a package into the gaol with Pkg2Gaol <packagename>
+# Note: if you install a package in the gaol, also run Bin2Gaol for any package binaries
+#       so you get their library dependencies.
+
+# Set the GAOL environment variable if you do not want to use the default (/tarpit)
+GAOL="${GAOL:=/tarpit}"
+
+
+# copy files into the same respective location within the gaol
+Gaol() {
+  while read "line" ; do
+	if [ `echo "$line" | grep ^/` ]; then
+	  folder="${GAOL}"`dirname $line`
+	  sudo mkdir -p "$folder"
+	  sudo cp "$line" "${folder}/`basename $line`"
+	fi
+  done
+}
+
+# install an executable into the gaol, with all of its depencencies
+Bin2Gaol() {
+  if [ -z "$1" ]; then
+    echo "Usage:  Bin2gaol <binary> \nExample: bin2gaol /usr/local/bin/ruby20"
+    exit 1
+  fi
+  if [ ! -x "$1" ]; then
+    echo "Bin2gaol only works with a dynamically-linked executable"
+    exit 1
+  fi
+  ldd "$1" | tr -s "\t: " " " | cut -d " " -f8 | grep ^/ | Gaol
+  echo "Installed binary $1 and its dependencies into the gaol"
+}
+
+# install a package into the gaol
+# Note: the binaries in the package may be linked with libraries not included in the package,
+#       so you might need to run bin2gaol on some of the package's binaries to get their
+#       dependencies installed into the gaol
+Pkg2Gaol() {
+  if [ -z "$1" ]; then
+    echo "Usage:  Pkg2Gaol <package> \nExample: Pkg2Gaol pcre"
+    exit 1
+  fi
+  pkg_info -L "$1" | grep '^/' | grep -v ':' | Gaol
+  echo "Installed package $1 into the gaol"
+}
+
+
+# create the gaol
+AddGaol() {
+  sudo mkdir -p ${GAOL}
+  cd ${GAOL}
+  for d in etc dev usr/local var bin sbin ; do
+    if [ ! -d $d ]; then
+      sudo mkdir -p $d
+      echo "Created gaol folder $d"
+    fi
+  done
+  for f in hosts protocols resolv.conf localtime ; do
+    if [ ! -f ${GAOL}/etc/$f ]; then
+      sudo cp -p /etc/$f ${GAOL}/etc/$f
+      echo "Installed ${GAOL}/etc/$f"
+    fi
+  done
+  cd ${GAOL}/dev
+  sudo /dev/MAKEDEV 'std'
+  sudo /dev/MAKEDEV '*random'
+  for d in console *t0 klog kmem ksyms mem tty xf86 ; do
+    rm -f $d
+  done
+}
