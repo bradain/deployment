@@ -73,7 +73,7 @@ User() {
     group=$(grep groups $INFO | cut -f2 | cut -d ' ' -f1) # primary group
     groups=$(grep groups $INFO | cut -f2 | cut -d ' ' -s -f2- | tr ' ' ',') # secondary groups if any
     class=$(grep class $INFO | cut -f2)
-    gecos=$(grep gecos $INFO | cut -f2)
+    gecos=$(grep gecos $INFO | cut -f2 | sed 's/"//g' )
     home=$(grep dir $INFO | cut -f2)
     shell=$(grep shell $INFO | cut -f2)
     options=""
@@ -246,7 +246,9 @@ Link() {
   [ -z "$_owner" ] && _owner="$Owner"
   [ -z "$_group" ] && _group="$Group"
   [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$_mode owner=$_owner group=$_group "
-  $do sudo ln -sf $_target $_path
+  $do sudo ln -sf $_target $_path   # recreate the link in case its destination is wrong
+  $do sudo chown -h $_owner $_path  # set the owner and group
+  $do sudo chgrp -h $_group $_path
   set -A stats $(stat -f '%#Lp %Su %Sg' $_path)  # eg. 0755 root wheel
   [ -z "$DEBUG" ] || echo "DEBUG: ${stats[0]} ${stats[1]} ${stats[2]}"
   if [ "$_mode" != "${stats[0]}" ]; then
@@ -254,11 +256,11 @@ Link() {
     || echo "Failed to fix mode for $_path"
   fi
   if [ "$_owner" != "${stats[1]}" ]; then
-    $do sudo chown $_owner $_path && echo "Fixed owner $_owner for $_path"\
+    $do sudo chown -h $_owner $_path && echo "Fixed owner $_owner for $_path"\
     || echo "Failed to fix owner for $_path"
   fi
   if [ "$_group" != "${stats[2]}" ]; then
-    $do sudo chgrp $_group $_path && echo "Fixed group $_group for $_path"\
+    $do sudo chgrp -h $_group $_path && echo "Fixed group $_group for $_path"\
     || echo "Failed to fix group for $_path"
   fi
 }
