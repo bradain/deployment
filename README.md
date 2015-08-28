@@ -30,9 +30,9 @@ DIR="/var/staging/mymachine"
 . /var/staging/deploy.subr 
 
 # need to define a group before a user
-Group 1000 brandon
+Group 1000 bradain
 # create a user - before you deploy files that will belong to that user
-User brandon 1000 brandon "Brandon" Home=/home/brandon \
+User bradain 1000 bradain "Bradain Foley" Home=/home/bradain \
   Class=staff Shell=/bin/ksh Groups=wheel
 ```
 
@@ -75,7 +75,7 @@ file's contents each time you run the deployment.
 There is one caveat: when specifying folders to be created, specify **all** intermediate folders, or else they 
 will be created but may have the wrong ownership due to the nature of `install(8)`. For example:
 ```bash
-export User="brandon" Group="brandon" Mode="0700"
+export User="bradain" Group="bradain" Mode="0700"
 # Wrong: ~/bin will be created automatically but owned by root!
 Folder ~/bin/special
 # Correct: creates ~/bin first then ~/bin/special 
