@@ -5,14 +5,14 @@ Group() {
   if [ -z "$1" -o -z "$2" ]; then
     echo "Usage: Group <gid> <name>" && return
   fi
-  sudo groupinfo $1 1>/dev/null 2>&1
+  doas groupinfo $1 1>/dev/null 2>&1
   egid=$?
-  sudo groupinfo $2 1>/dev/null 2>&1
+  doas groupinfo $2 1>/dev/null 2>&1
   ename=$?
   if [ $egid != 0 -a $ename != 0 ]; then      # create the group
-    $do sudo groupadd -g $1 $2 >/dev/null 2>&1 || echo "Error creating group $1 $2"
+    $do doas groupadd -g $1 $2 >/dev/null 2>&1 || echo "Error creating group $1 $2"
   elif [ $egid != 0 -a $ename = 0 ]; then  # fix the gid
-    $do sudo groupmod -g $1 $2 && echo "Fixing group $2 gid to $1" || echo "Error changing gid for group $2"
+    $do doas groupmod -g $1 $2 && echo "Fixing group $2 gid to $1" || echo "Error changing gid for group $2"
   elif [ $egid = 0 -a $ename != 0 ]; then  # gid already used
     echo "WARN: gid $1 is already in use!"
   fi # else the group is defined properly
@@ -54,7 +54,7 @@ User() {
   [ -z "$DEBUG" ] || echo "DEBUG: name=$_name uid=$_uid group=$_group gecos=$_gecos"
   [ -z "$DEBUG" ] || echo "DEBUG: home=$_home shell=$_shell class=$_class groups=$_groups"
   INFO=".u.$_name"
-  sudo userinfo $_name >$INFO 2>/dev/null
+  doas userinfo $_name >$INFO 2>/dev/null
   if [ $? != 0 ]; then  # create the user
     if [ -z "$_groups" ]; then
       secondary=""
@@ -63,11 +63,11 @@ User() {
     fi
     # avoid an error - do not make directory if it exists already
     [ -d $_home ] && makedir="" || makedir="-m"
-    $do sudo useradd -u $_uid -g $_group -s $_shell \
+    $do doas useradd -u $_uid -g $_group -s $_shell \
       $makedir -d $_home $secondary -c "$_gecos" -L $_class $_name \
       && echo "Created user $_name" || echo "Failed to create user $_name"
     # if the home directory is the special /nonexistent directory, remove it if it was created
-    [ "$_home" = "/nonexistent" -a -d /nonexistent ] && sudo rm -rf /nonexistent
+    [ "$_home" = "/nonexistent" -a -d /nonexistent ] && doas rm -rf /nonexistent
   else  # see if the user is correctly set up
     uid=$(grep uid $INFO | cut -f2)
     group=$(grep groups $INFO | cut -f2 | cut -d ' ' -f1) # primary group
@@ -87,7 +87,7 @@ User() {
       options="${options} -S $_groups"
     fi
     if [ -n "$options" ]; then
-      $do sudo usermod $options $_name && echo "Fixed user $_name with $options" || echo "Failed to fix user $_name"
+      $do doas usermod $options $_name && echo "Fixed user $_name with $options" || echo "Failed to fix user $_name"
     fi
   fi
   rm $INFO
@@ -128,11 +128,11 @@ Folder() {
     [ "$_owner" = "${stats[1]}" ] || options="$options -o $_owner"
     [ "$_group" = "${stats[2]}" ] || options="$options -g $_group"
     if [ -n "$options" ]; then
-      $do sudo install -d $options $_path \
+      $do doas install -d $options $_path \
       && echo "Fixed folder $_path with $options" || echo "Failed to fix $_path with $_options"
     fi
   else  # path does not exist, create the folder
-    $do sudo install -d -m $_mode -o $_owner -g $_group $_path \
+    $do doas install -d -m $_mode -o $_owner -g $_group $_path \
       && echo "Created folder $_path" || echo "Failed to create folder $_path"
   fi
 }
@@ -181,21 +181,21 @@ File() {
     if [ ! -e $_src ]; then
       echo "Source file not found for $_path" && return 1
     fi
-    $do sudo install -m $_mode -o $_owner -g $_group $_src $_path \
+    $do doas install -m $_mode -o $_owner -g $_group $_src $_path \
       && echo "$MSG file $_path" || echo "failed while $MSG file $_path"
   fi
   set -A stats $(stat -f '%#Lp %Su %Sg' $_path)  # eg. 0755 root wheel
   [ -z "$DEBUG" ] || echo "DEBUG: ${stats[0]} ${stats[1]} ${stats[2]}"
   if [ "$_mode" != "${stats[0]}" ]; then
-    $do sudo chmod $_mode $_path && echo "Fixed mode $_mode for $_path"\
+    $do doas chmod $_mode $_path && echo "Fixed mode $_mode for $_path"\
     || echo "Failed to fix mode for $_path"
   fi
   if [ "$_owner" != "${stats[1]}" ]; then
-    $do sudo chown $_owner $_path && echo "Fixed owner $_owner for $_path"\
+    $do doas chown $_owner $_path && echo "Fixed owner $_owner for $_path"\
     || echo "Failed to fix owner for $_path"
   fi
   if [ "$_group" != "${stats[2]}" ]; then
-    $do sudo chgrp $_group $_path && echo "Fixed group $_group for $_path"\
+    $do doas chgrp $_group $_path && echo "Fixed group $_group for $_path"\
     || echo "Failed to fix group for $_path"
   fi
 }
@@ -210,12 +210,12 @@ AllFiles() {
   [ -z "$Group" ] && Group="wheel"
   [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$Mode owner=$Owner group=$Group "
   # Copy all of the files to the target folder
-  $do sudo cp -R * $_path || echo "Failed to copy all files to $_path"
-  $do sudo chmod -R $Mode $_path || echo "Failed to set mode for $_path"
+  $do doas cp -R * $_path || echo "Failed to copy all files to $_path"
+  $do doas chmod -R $Mode $_path || echo "Failed to set mode for $_path"
   # make all of the directories executable (navigable)
-  $do sudo chmod +x  `sudo find $_path -type d | xargs`
-  $do sudo chown -R $Owner $_path || echo "Failed to set owner for $_path"
-  $do sudo chgrp -R $Group $_path || echo "Failed to set group for $_path"
+  $do doas chmod +x  `doas find $_path -type d | xargs`
+  $do doas chown -R $Owner $_path || echo "Failed to set owner for $_path"
+  $do doas chgrp -R $Group $_path || echo "Failed to set group for $_path"
 }
 
 
@@ -246,21 +246,21 @@ Link() {
   [ -z "$_owner" ] && _owner="$Owner"
   [ -z "$_group" ] && _group="$Group"
   [ -z "$DEBUG" ] || echo "DEBUG: path=$_path mode=$_mode owner=$_owner group=$_group "
-  $do sudo ln -sf $_target $_path   # recreate the link in case its destination is wrong
-  $do sudo chown -h $_owner $_path  # set the owner and group
-  $do sudo chgrp -h $_group $_path
+  $do doas ln -sf $_target $_path   # recreate the link in case its destination is wrong
+  $do doas chown -h $_owner $_path  # set the owner and group
+  $do doas chgrp -h $_group $_path
   set -A stats $(stat -f '%#Lp %Su %Sg' $_path)  # eg. 0755 root wheel
   [ -z "$DEBUG" ] || echo "DEBUG: ${stats[0]} ${stats[1]} ${stats[2]}"
   if [ "$_mode" != "${stats[0]}" ]; then
-    $do sudo chmod $_mode $_path && echo "Fixed mode $_mode for $_path"\
+    $do doas chmod $_mode $_path && echo "Fixed mode $_mode for $_path"\
     || echo "Failed to fix mode for $_path"
   fi
   if [ "$_owner" != "${stats[1]}" ]; then
-    $do sudo chown -h $_owner $_path && echo "Fixed owner $_owner for $_path"\
+    $do doas chown -h $_owner $_path && echo "Fixed owner $_owner for $_path"\
     || echo "Failed to fix owner for $_path"
   fi
   if [ "$_group" != "${stats[2]}" ]; then
-    $do sudo chgrp -h $_group $_path && echo "Fixed group $_group for $_path"\
+    $do doas chgrp -h $_group $_path && echo "Fixed group $_group for $_path"\
     || echo "Failed to fix group for $_path"
   fi
 }
@@ -272,7 +272,7 @@ Cron() {
     echo "Insufficient details provided: Cron $1 $2 $3"
     return 1
   fi
-  $do sudo grep "$3" /var/cron/tabs/$1 >/dev/null 2>&1 || echo "Missing cron job for $1: $2 $3"
+  $do doas grep "$3" /var/cron/tabs/$1 >/dev/null 2>&1 || echo "Missing cron job for $1: $2 $3"
 }
 
 Rotate() {
@@ -282,7 +282,7 @@ Rotate() {
     echo "Insufficient details provided: Rotate $1 $2 $3"
     return 1
   fi
-  $do sudo grep \""$1"\" /etc/newsyslog || echo "Missing newsyslog entry for $1 $2 $3"
+  $do doas grep \""$1"\" /etc/newsyslog || echo "Missing newsyslog entry for $1 $2 $3"
 }
 
 # You can install binaries and their dependencies with bin2gaol /path/to/binary
@@ -299,8 +299,8 @@ Gaol() {
   while read "line" ; do
 	if [ `echo "$line" | grep ^/` ]; then
 	  folder="${GAOL}"`dirname $line`
-	  sudo mkdir -p "$folder"
-	  sudo cp "$line" "${folder}/`basename $line`"
+	  doas mkdir -p "$folder"
+	  doas cp "$line" "${folder}/`basename $line`"
 	fi
   done
 }
@@ -335,23 +335,23 @@ Pkg2Gaol() {
 
 # create the gaol
 AddGaol() {
-  sudo mkdir -p ${GAOL}
+  doas mkdir -p ${GAOL}
   cd ${GAOL}
   for d in etc dev usr/local var bin sbin ; do
     if [ ! -d $d ]; then
-      sudo mkdir -p $d
+      doas mkdir -p $d
       echo "Created gaol folder $d"
     fi
   done
   for f in hosts protocols resolv.conf localtime ; do
     if [ ! -f ${GAOL}/etc/$f ]; then
-      sudo cp -p /etc/$f ${GAOL}/etc/$f
+      doas cp -p /etc/$f ${GAOL}/etc/$f
       echo "Installed ${GAOL}/etc/$f"
     fi
   done
   cd ${GAOL}/dev
-  sudo /dev/MAKEDEV 'std'
-  sudo /dev/MAKEDEV '*random'
+  doas /dev/MAKEDEV 'std'
+  doas /dev/MAKEDEV '*random'
   for d in console *t0 klog kmem ksyms mem tty xf86 ; do
     rm -f $d
   done
